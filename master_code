@@ -1,0 +1,150 @@
+#define COMPIN 14//选择输出信号的引脚，这里选择GPIO14
+#define TJC Serial2   //宏定义需要的传输的串口
+#define FRAME_LENGTH 4 //宏定义一整个帧的长度，主要是根据串口里写的协议来定
+#define FLAGMASTER 2
+
+
+int i=0;
+int j=0;
+int person=0;//选择通信的人员，有效值[1,2,3...]
+char wave[4];
+unsigned char ubuffer[FRAME_LENGTH];//临时存数据的一个地方
+
+void setup() 
+{
+  TJC.begin(9600);
+  pinMode(COMPIN,OUTPUT);
+  //标定主机
+  pinMode(FLAGMASTER,OUTPUT);
+  digitalWrite(FLAGMASTER,HIGH);
+  //
+  while (TJC.read()>=0);   //由于串口屏开机会发送88 ff ff ff，所以要清空缓冲区
+  TJC.print("page main\xff\xff\xff");
+  Serial.begin(115200);
+}
+
+void loop() 
+{
+  if (TJC.available()>=FRAME_LENGTH)
+  {
+    //Serial.println(TJC.available());
+     dowithdatafromonthers();
+     if (ubuffer[1]==0xCC)
+        {
+          person=1;
+        }
+     else if(ubuffer[1]==0xDD)
+        {
+          person=2;  
+        }
+     else
+        {
+              if (person==1)
+                  {
+                    Send1(ubuffer[1]);
+                  }
+              else if(person==2)
+                  {
+                    Send2(ubuffer[1]);
+                  }
+        }
+  }  
+}
+
+int Send1(char tex)  //发送函数，把要发送的东西放在实参里
+{
+    wave[0]=0x00;
+    wave[1]=0xFF;//0xAA为两个包头，其二进制为10101010，wave数组的第三个变量为要发送的字符
+    i=0;
+    j=0;//把控制读位的变量重新复赋值为0，可以开始新一轮发送
+    wave[3]=0xAA; //wave[3]为包尾，值为0x00
+    wave[2]=tex;//把要传的内容放到wave数组的第三个位置上
+    
+    //到这一行之前，所有的包都已经生成，接下来只需要开始按bit发送就可以
+    hw_timer_t* tim=timerBegin(0,80,true);//初始化计时器，放在Send函数靠前的位置，表示这个send函数一旦启动，我的计时器就开始工作，计时器主要用于在时间层面上按照bit发送高低电平
+    timerAttachInterrupt(tim,&Sendbit,true);//给定时器绑定中断函数
+    timerAlarmWrite(tim, 1000, true);//给定时器设定中断计数的数据，写在第二个参数里
+    timerAlarmEnable(tim);
+    while(1)
+    {
+      delay(1);
+    if(i==4)
+    {
+     timerDetachInterrupt(tim);
+     timerEnd(tim);
+     return 1;
+    }
+    }
+}
+  
+int Send2(char tex)  //发送函数，把要发送的东西放在实参里
+{
+    wave[0]=0xFF;
+    wave[1]=0x00;//0xAA为两个包头，其二进制为10101010，wave数组的第三个变量为要发送的字符
+    i=0;
+    j=0;//把控制读位的变量重新复赋值为0，可以开始新一轮发送
+    wave[3]=0xAA; //wave[3]为包尾，值为0x00
+    wave[2]=tex;//把要传的内容放到wave数组的第三个位置上
+    
+    //到这一行之前，所有的包都已经生成，接下来只需要开始按bit发送就可以
+    hw_timer_t* tim=timerBegin(0,80,true);//初始化计时器，放在Send函数靠前的位置，表示这个send函数一旦启动，我的计时器就开始工作，计时器主要用于在时间层面上按照bit发送高低电平
+    timerAttachInterrupt(tim,&Sendbit,true);//给定时器绑定中断函数
+    timerAlarmWrite(tim, 1000, true);//给定时器设定中断计数的数据，写在第二个参数里
+    timerAlarmEnable(tim);
+    while(1)
+    {
+      delay(1);
+    if(i==4)
+    {
+     timerDetachInterrupt(tim);
+     timerEnd(tim);
+     return 1;
+    }
+    }
+}
+    
+void Sendbit(void)//定时器中断函数，每隔一段时间就改变一次引脚的高低电平
+{
+  if ((wave[i] & 0x80)==0x00)//来检测当前wave的第一位是多少，并改在电平上
+   {
+      digitalWrite(COMPIN,LOW);
+      if (i==2)
+      {
+      Serial.printf("L");
+      }
+   }
+      else
+   {
+      digitalWrite(COMPIN,HIGH); 
+      if (i==2)
+      {
+      Serial.printf("H");
+      }
+   }
+   wave[i]=wave[i]<<1;
+   if (j==7)
+    {
+      i=(i+1)%5;
+    }
+    j=(j+1)%8;
+}
+
+void dowithdatafromonthers()
+{
+ while (TJC.available()>=FRAME_LENGTH)//available返回值是串口缓冲区目前存在的字符个数，而且不删除，上面的read是从缓冲区读取一个字符并且删除
+ {
+  unsigned char fram_head=TJC.peek();//从串口缓冲区读取第一个字节且不删除
+  if(fram_head==0x55)//这里的判断需要做的事情是判断读到的是不是帧头
+  {
+  TJC.readBytes(ubuffer,FRAME_LENGTH);//从缓冲区读取FRAME_LENGTH个字节的数据并存入ubuffer，此时还是不能删除缓冲区的数据，所以不能用read函数
+  if (ubuffer[3]==0xff && ubuffer[4]==0xff && ubuffer[2]==0xff)//确保此时是一帧
+  {
+    Serial.printf("the data is:%X",ubuffer[1]);
+  }  
+  }
+  else
+  {
+    TJC.read();//删除串口缓冲区的一个字节
+  }
+  } 
+}
